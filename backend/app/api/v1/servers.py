@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.crypto import hash_token, new_token
@@ -52,6 +53,17 @@ async def _get_agent(db: AsyncSession, server_id: str) -> ServerAgent | None:
     ).scalar_one_or_none()
 
 
+async def _load_server(db: AsyncSession, server_id: str) -> Server | None:
+    """سرور + Agent را با selectinload می‌آورد (بدون lazy load)."""
+    return (
+        await db.execute(
+            select(Server)
+            .options(selectinload(Server.agent))
+            .where(Server.id == server_id)
+        )
+    ).scalar_one_or_none()
+
+
 async def _issue_enrollment(db: AsyncSession, server: Server) -> str:
     """توکن enrollment برای نصب Agent صادر می‌کند."""
     token = new_token(32)
@@ -87,7 +99,7 @@ async def list_servers(
     db: AsyncSession = Depends(get_db),
     _: Principal = Depends(require(Perm.SERVERS_READ.value)),
 ):
-    query = select(Server)
+    query = select(Server).options(selectinload(Server.agent))
     if params.search:
         term = f"%{params.search}%"
         query = query.where(
@@ -105,7 +117,7 @@ async def list_servers(
     if group_id:
         query = query.where(Server.group_id == group_id)
 
-    total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+    total = (await db.execute(select(func.count()).select_from(query.order_by(None).subquery()))).scalar() or 0
 
     sort_column = {
         "name": Server.name,
@@ -142,6 +154,7 @@ async def create_server(
     server = Server(**payload.model_dump(), status="pending")
     db.add(server)
     await db.flush()
+    server_id = server.id
 
     token = await _issue_enrollment(db, server)
 
@@ -149,25 +162,27 @@ async def create_server(
         db,
         action="server_created",
         user=actor.user,
-        server_id=server.id,
+        server_id=server_id,
         target=server.name,
         ip=client_ip(request),
     )
     await record_event(
         db,
         target_type="server",
-        target_id=server.id,
+        target_id=server_id,
         kind="created",
         title=f"سرور «{server.name}» ثبت شد",
     )
 
-    # Agent را دوباره با selectin لود می‌کنیم تا ServerOut بدون lazy load ساخته شود
-    await db.refresh(server, attribute_names=["agent"])
+    # دوباره با selectinload بخوان تا MissingGreenlet ندهد
+    loaded = await _load_server(db, server_id)
+    if loaded is None:
+        raise NotFound("سرور بعد از ثبت یافت نشد.")
 
-    await hub.publish("servers", "server.created", {"id": server.id, "name": server.name})
+    await hub.publish("servers", "server.created", {"id": server_id, "name": loaded.name})
 
     return ServerCreated(
-        server=ServerOut.model_validate(server),
+        server=ServerOut.model_validate(loaded),
         enrollment_token=token,
         install_command=install_command(token),
     )
@@ -179,7 +194,7 @@ async def get_server(
     db: AsyncSession = Depends(get_db),
     _: Principal = Depends(require(Perm.SERVERS_READ.value)),
 ):
-    server = await db.get(Server, server_id)
+    server = await _load_server(db, server_id)
     if server is None:
         raise NotFound("سرور یافت نشد.")
     return ServerOut.model_validate(server)
@@ -214,7 +229,8 @@ async def update_server(
         ip=client_ip(request),
         payload=data,
     )
-    return ServerOut.model_validate(server)
+    loaded = await _load_server(db, server.id)
+    return ServerOut.model_validate(loaded or server)
 
 
 @router.delete("/servers/{server_id}", response_model=OkResponse)
@@ -244,7 +260,6 @@ async def delete_server(
 
     name = server.name
 
-    # به جای server.agent از کوئری صریح استفاده می‌کنیم
     agent = await _get_agent(db, server.id)
     if remove_agent and agent is not None and agent.enrolled:
         try:

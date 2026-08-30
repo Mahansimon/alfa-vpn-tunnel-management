@@ -88,7 +88,9 @@ else
 fi
 mkdir -p "$AGENT_HOME" "$AGENT_CONF_DIR/tls" "$AGENT_STATE_DIR/build" "$AGENT_STATE_DIR/backup" \
          "$AGENT_LOG_DIR" "$TUNNEL_DIR" "$BINARY_DIR"
-chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_HOME" "$AGENT_STATE_DIR" "$AGENT_LOG_DIR" "$TUNNEL_DIR" "$BINARY_DIR"
+# مهم: پوشه conf هم باید مال alfa-agent باشد تا بتواند agent.env را بخواند
+chown -R "$AGENT_USER:$AGENT_USER" \
+  "$AGENT_HOME" "$AGENT_CONF_DIR" "$AGENT_STATE_DIR" "$AGENT_LOG_DIR" "$TUNNEL_DIR" "$BINARY_DIR"
 chmod 750 "$AGENT_CONF_DIR" "$AGENT_STATE_DIR" "$TUNNEL_DIR" "$BINARY_DIR"
 ok "مسیرها آماده شدند."
 
@@ -121,7 +123,6 @@ if [[ -n "$PANEL_URL" ]]; then
     mkdir -p "$BINARY_DIR"
     tar -xzf "$ASSET_TMP/tunnel-assets.tar.gz" -C "$ASSET_TMP"
     ASSET_ROOT="$ASSET_TMP/tunnel-assets"
-    # Keep the original supplied files for reproducibility and offline repair.
     cp -f "$ASSET_ROOT/backhaul.sh" "$BINARY_DIR/backhaul.sh" 2>/dev/null || true
     cp -f "$ASSET_ROOT/backhaul_premium" "$BINARY_DIR/backhaul_premium" 2>/dev/null || true
     chmod 750 "$BINARY_DIR/backhaul.sh" "$BINARY_DIR/backhaul_premium" 2>/dev/null || true
@@ -159,6 +160,10 @@ chmod 600 "$AGENT_CONF_DIR/tls/agent.key"
 chmod 644 "$AGENT_CONF_DIR/tls/agent.crt"
 
 step 7 "نوشتن فایل تنظیمات..."
+# مطمئن شو پوشه conf قابل دسترسی برای Agent است
+chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_CONF_DIR"
+chmod 750 "$AGENT_CONF_DIR"
+
 if [[ ! -f "$AGENT_CONF_DIR/agent.env" ]]; then
   cat >"$AGENT_CONF_DIR/agent.env" <<CONF
 # تنظیمات Agent — Alfa VpnTunnel Managment
@@ -179,7 +184,15 @@ else
   [[ -n "$PANEL_URL" ]] && sed -i "s|^PANEL_URL=.*|PANEL_URL=${PANEL_URL}|" "$AGENT_CONF_DIR/agent.env"
 fi
 grep -q '^PYTHONPATH=' "$AGENT_CONF_DIR/agent.env" || echo "PYTHONPATH=${AGENT_HOME}" >>"$AGENT_CONF_DIR/agent.env"
-chown "$AGENT_USER:$AGENT_USER" "$AGENT_CONF_DIR/agent.env"
+# اگر PANEL_URL خالی مانده بود، حتماً ست شود
+if [[ -n "$PANEL_URL" ]]; then
+  if grep -qE '^PANEL_URL=' "$AGENT_CONF_DIR/agent.env"; then
+    sed -i "s|^PANEL_URL=.*|PANEL_URL=${PANEL_URL}|" "$AGENT_CONF_DIR/agent.env"
+  else
+    echo "PANEL_URL=${PANEL_URL}" >>"$AGENT_CONF_DIR/agent.env"
+  fi
+fi
+chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_CONF_DIR"
 chmod 600 "$AGENT_CONF_DIR/agent.env"
 ok "تنظیمات نوشته شد: $AGENT_CONF_DIR/agent.env"
 
@@ -222,7 +235,11 @@ elif [[ -f "$AGENT_STATE_DIR/state.json" ]] && grep -q '"agent_token"' "$AGENT_S
   ok "این Agent قبلاً ثبت شده است؛ ثبت‌نام مجدد لازم نیست."
 else
   [[ -n "$PANEL_URL" && -n "$TOKEN" ]] || die "برای ثبت‌نام هر دو مقدار --panel-url و --token لازم است."
-  if sudo -u "$AGENT_USER" env PYTHONPATH="$AGENT_HOME" ALFA_AGENT_ENV="$AGENT_CONF_DIR/agent.env" \
+  # PANEL_URL هم در env پاس داده می‌شود تا حتی اگر خواندن فایل مشکل داشت، مقدار موجود باشد
+  if sudo -u "$AGENT_USER" env \
+      PYTHONPATH="$AGENT_HOME" \
+      ALFA_AGENT_ENV="$AGENT_CONF_DIR/agent.env" \
+      PANEL_URL="$PANEL_URL" \
       python3 -m alfa_agent.main --register "$TOKEN"; then
     ok "ثبت‌نام در پنل انجام شد."
   else
