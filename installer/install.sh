@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+<<<<<<< HEAD
 # Alfa automatic environment bootstrap
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$PROJECT_ROOT/.env"
@@ -16,6 +17,8 @@ elif ! grep -qE '^POSTGRES_PASSWORD=.+' "$ENV_FILE"; then
   chmod 600 "$ENV_FILE"
 fi
 
+=======
+>>>>>>> d2d799646a0eb15b8d41d24b83221dca3acc92f4
 # نصب کامل پنل Alfa VpnTunnel Managment روی Ubuntu 22.04/24.04 و Debian 12
 # اجرا:  sudo bash install.sh            (تعاملی)
 #        sudo bash install.sh --non-interactive --domain panel.example.com --email you@example.com
