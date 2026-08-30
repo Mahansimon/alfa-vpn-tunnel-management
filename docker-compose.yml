@@ -1,0 +1,87 @@
+# Alfa VpnTunnel Managment — استقرار Production با Docker Compose
+name: alfa-panel
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-alfa}
+      POSTGRES_USER: ${POSTGRES_USER:-alfa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD لازم است}
+      TZ: ${TIMEZONE:-Asia/Tehran}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-alfa} -d ${POSTGRES_DB:-alfa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [alfa]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [alfa]
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      FRONTEND_DIST: /nonexistent   # فایل‌های استاتیک توسط Nginx سرو می‌شوند
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    volumes:
+      - ${ALFA_DATA:-/var/lib/alfa}:/var/lib/alfa
+      - ${TUNNEL_BINARY_DIR:-/opt/alfa/tunnel-binaries}:/opt/alfa/tunnel-binaries
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    networks: [alfa]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend: {condition: service_started}
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./deploy/nginx/proxy-common.conf:/etc/nginx/proxy-common.conf:ro
+      - ${ALFA_DATA:-/var/lib/alfa}/certs:/etc/alfa/certs:ro
+      - ${ALFA_DATA:-/var/lib/alfa}/acme:/var/www/acme
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [alfa]
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  alfa:
+    driver: bridge

@@ -1,0 +1,49 @@
+name: security
+
+on:
+  push: {branches: [main]}
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  python-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install pip-audit==2.7.3
+      - name: بررسی آسیب‌پذیری وابستگی‌های پایتون
+        run: pip-audit -r backend/requirements.txt --strict || true
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - run: npm install --no-audit --no-fund
+      - name: بررسی آسیب‌پذیری وابستگی‌های npm
+        run: npm audit --audit-level=high || true
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: جستجوی Secret احتمالی در سورس
+        run: |
+          set +e
+          PATTERN='(BEGIN RSA PRIVATE KEY|BEGIN OPENSSH PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|xox[baprs]-)'
+          MATCHES=$(grep -rInE "$PATTERN" --exclude-dir=.git --exclude=.env.example . | grep -v 'security.yml')
+          if [ -n "$MATCHES" ]; then
+            echo "$MATCHES"
+            echo "::error::احتمال وجود Secret واقعی در سورس"
+            exit 1
+          fi
+          echo "هیچ Secret واقعی پیدا نشد."

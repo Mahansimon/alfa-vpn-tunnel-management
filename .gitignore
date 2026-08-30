@@ -1,0 +1,41 @@
+# محیط و Secretها
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+
+# پایتون
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# فرانت‌اند
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# لاگ و داده
+*.log
+logs/
+data/
+backups/
+*.dump
+*.sqlite3
+
+# سیستم
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

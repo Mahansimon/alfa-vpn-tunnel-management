@@ -1,0 +1,40 @@
+name: lint
+
+on:
+  push: {branches: [main, develop]}
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install ruff==0.8.6
+      - name: Ruff (backend + agent)
+        run: |
+          ruff check backend/app backend/tests agent/alfa_agent agent/tests
+          ruff format --check backend/app agent/alfa_agent || true
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: نصب ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: بررسی اسکریپت‌ها
+        run: shellcheck -S warning installer/*.sh scripts/*.sh || true
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - run: npm install --no-audit --no-fund
+      - run: npm run lint

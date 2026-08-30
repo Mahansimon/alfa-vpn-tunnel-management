@@ -1,0 +1,17 @@
+name: agent-test
+
+on:
+  push: {branches: [main, develop]}
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: تست Agent (بدون وابستگی خارجی)
+        working-directory: agent
+        run: python -m unittest discover -s tests -v
