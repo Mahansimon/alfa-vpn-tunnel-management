@@ -1,0 +1,34 @@
+name: backend-test
+
+on:
+  push: {branches: [main, develop]}
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: نصب وابستگی‌ها
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: اجرای تست‌ها
+        env:
+          ENVIRONMENT: testing
+          DATABASE_URL: sqlite+aiosqlite:///:memory:
+          SECRET_KEY: ci-secret-key-for-tests-only
+          SECRETS_ENCRYPTION_KEY: ci-encryption-key-for-tests-only
+          REDIS_ENABLED: "false"
+          SCHEDULER_ENABLED: "false"
+          COOKIE_SECURE: "false"
+        run: pytest -q

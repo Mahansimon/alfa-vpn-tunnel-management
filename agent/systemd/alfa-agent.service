@@ -1,0 +1,33 @@
+[Unit]
+Description=Alfa VpnTunnel Managment Agent
+Documentation=https://github.com/YOUR-GITHUB-USER/alfa-vpn-tunnel-management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alfa-agent
+Group=alfa-agent
+EnvironmentFile=/etc/alfa-agent/agent.env
+WorkingDirectory=/opt/alfa-agent
+ExecStart=/usr/bin/python3 -m alfa_agent.main --serve
+Restart=always
+RestartSec=5
+
+# سخت‌سازی سرویس: کمترین دسترسی لازم
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryMax=256M
+CPUQuota=40%
+ReadWritePaths=/var/lib/alfa-agent /var/log/alfa-agent /etc/alfa/tunnels /opt/alfa/tunnel-binaries
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+# دسترسی محدود و allowlist‌شده Agent به عملیات نیازمند root.
+# هیچ دستور دلخواهی مجاز نیست؛ فقط موارد زیر.
+Defaults:alfa-agent !requiretty
+alfa-agent ALL=(root) NOPASSWD: /bin/systemctl daemon-reload
+alfa-agent ALL=(root) NOPASSWD: /bin/systemctl start alfa-tunnel-*, /bin/systemctl stop alfa-tunnel-*, /bin/systemctl restart alfa-tunnel-*, /bin/systemctl enable alfa-tunnel-*, /bin/systemctl disable alfa-tunnel-*
+alfa-agent ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
+alfa-agent ALL=(root) NOPASSWD: /usr/bin/systemctl start alfa-tunnel-*, /usr/bin/systemctl stop alfa-tunnel-*, /usr/bin/systemctl restart alfa-tunnel-*, /usr/bin/systemctl enable alfa-tunnel-*, /usr/bin/systemctl disable alfa-tunnel-*
+alfa-agent ALL=(root) NOPASSWD: /bin/cp /var/lib/alfa-agent/alfa-tunnel-*.service /etc/systemd/system/*
+alfa-agent ALL=(root) NOPASSWD: /bin/rm -f /etc/systemd/system/alfa-tunnel-*.service
+alfa-agent ALL=(root) NOPASSWD: /usr/sbin/ufw status
