@@ -45,10 +45,21 @@ def install_command(token: str) -> str:
     )
 
 
+async def _get_agent(db: AsyncSession, server_id: str) -> ServerAgent | None:
+    """Agent را صریحاً با await می‌خواند تا MissingGreenlet رخ ندهد."""
+    return (
+        await db.execute(select(ServerAgent).where(ServerAgent.server_id == server_id))
+    ).scalar_one_or_none()
+
+
 async def _issue_enrollment(db: AsyncSession, server: Server) -> str:
+    """توکن enrollment برای نصب Agent صادر می‌کند."""
     token = new_token(32)
-    agent = server.agent
     expires = datetime.now(timezone.utc) + timedelta(hours=ENROLLMENT_TTL_HOURS)
+
+    # در async نباید server.agent را مستقیم بخوانیم (lazy load → MissingGreenlet)
+    agent = await _get_agent(db, server.id)
+
     if agent is None:
         agent = ServerAgent(
             server_id=server.id,
@@ -61,6 +72,7 @@ async def _issue_enrollment(db: AsyncSession, server: Server) -> str:
         agent.enrollment_token_hash = hash_token(token)
         agent.enrollment_expires_at = expires
         agent.enrolled = False
+
     await db.flush()
     return token
 
@@ -92,19 +104,25 @@ async def list_servers(
         query = query.where(Server.country == country)
     if group_id:
         query = query.where(Server.group_id == group_id)
+
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+
     sort_column = {
         "name": Server.name,
         "status": Server.status,
         "health": Server.health_score,
         "created_at": Server.created_at,
     }.get(params.sort or "created_at", Server.created_at)
+
     order = sort_column.asc() if params.order == "asc" else sort_column.desc()
+
     rows = (
         await db.execute(query.order_by(order).offset(params.offset).limit(params.per_page))
     ).scalars().all()
+
     if tag:
         rows = [r for r in rows if tag in (r.tags or [])]
+
     return paginate([ServerOut.model_validate(r) for r in rows], total, params)
 
 
@@ -120,10 +138,13 @@ async def create_server(
     ).scalar_one_or_none()
     if duplicate:
         raise Conflict("سروری با این IP قبلاً ثبت شده است.")
+
     server = Server(**payload.model_dump(), status="pending")
     db.add(server)
     await db.flush()
+
     token = await _issue_enrollment(db, server)
+
     await record_audit(
         db,
         action="server_created",
@@ -139,8 +160,12 @@ async def create_server(
         kind="created",
         title=f"سرور «{server.name}» ثبت شد",
     )
-    await db.refresh(server)
+
+    # Agent را دوباره با selectin لود می‌کنیم تا ServerOut بدون lazy load ساخته شود
+    await db.refresh(server, attribute_names=["agent"])
+
     await hub.publish("servers", "server.created", {"id": server.id, "name": server.name})
+
     return ServerCreated(
         server=ServerOut.model_validate(server),
         enrollment_token=token,
@@ -171,11 +196,14 @@ async def update_server(
     server = await db.get(Server, server_id)
     if server is None:
         raise NotFound("سرور یافت نشد.")
+
     data = payload.model_dump(exclude_unset=True)
     for field, value in data.items():
         setattr(server, field, value)
+
     if "maintenance" in data:
         server.status = "maintenance" if data["maintenance"] else "pending"
+
     await db.flush()
     await record_audit(
         db,
@@ -200,26 +228,38 @@ async def delete_server(
     server = await db.get(Server, server_id)
     if server is None:
         raise NotFound("سرور یافت نشد.")
+
     tunnels = (
         await db.execute(
             select(func.count())
             .select_from(Tunnel)
-            .where((Tunnel.source_server_id == server.id) | (Tunnel.destination_server_id == server.id))
+            .where(
+                (Tunnel.source_server_id == server.id)
+                | (Tunnel.destination_server_id == server.id)
+            )
         )
     ).scalar() or 0
     if tunnels:
-        raise Conflict(
-            f"این سرور در {tunnels} تونل استفاده شده است. ابتدا تونل‌ها را حذف کنید."
-        )
+        raise Conflict(f"این سرور در {tunnels} تونل استفاده شده است. ابتدا تونل‌ها را حذف کنید.")
+
     name = server.name
-    if remove_agent and server.agent and server.agent.enrolled:
+
+    # به جای server.agent از کوئری صریح استفاده می‌کنیم
+    agent = await _get_agent(db, server.id)
+    if remove_agent and agent is not None and agent.enrolled:
         try:
             await agent_client.call(server, "service_stop", {"service": "alfa-agent"})
         except Exception:
-            pass  # سرور ممکن است در دسترس نباشد؛ حذف رکورد ادامه پیدا می‌کند
+            pass
+
     await db.delete(server)
     await record_audit(
-        db, action="server_deleted", user=actor.user, target=name, ip=client_ip(request), result="success"
+        db,
+        action="server_deleted",
+        user=actor.user,
+        target=name,
+        ip=client_ip(request),
+        result="success",
     )
     await hub.publish("servers", "server.deleted", {"id": server_id})
     return OkResponse(message=f"سرور «{name}» حذف شد.")
@@ -235,14 +275,21 @@ async def regenerate_enrollment_token(
     server = await db.get(Server, server_id)
     if server is None:
         raise NotFound("سرور یافت نشد.")
+
     token = await _issue_enrollment(db, server)
+    agent = await _get_agent(db, server.id)
+
     await record_audit(
-        db, action="enrollment_token_issued", user=actor.user, server_id=server.id, ip=client_ip(request)
+        db,
+        action="enrollment_token_issued",
+        user=actor.user,
+        server_id=server.id,
+        ip=client_ip(request),
     )
     return EnrollmentTokenOut(
         enrollment_token=token,
         install_command=install_command(token),
-        expires_at=server.agent.enrollment_expires_at if server.agent else None,
+        expires_at=agent.enrollment_expires_at if agent else None,
     )
 
 
@@ -256,8 +303,10 @@ async def server_metrics(
     server = await db.get(Server, server_id)
     if server is None:
         raise NotFound("سرور یافت نشد.")
+
     points = await metrics_service.series(db, server_id, range)
     latest = await metrics_service.latest_metric(db, server_id)
+
     latest_payload = {}
     if latest:
         latest_payload = {
@@ -278,6 +327,7 @@ async def server_metrics(
             "tx_rate": latest.net_tx_rate,
             "uptime_seconds": latest.uptime_seconds,
         }
+
     return {
         "server_id": server_id,
         "range": range,
@@ -348,11 +398,14 @@ async def server_action(
     }
     if action not in allowed:
         raise Conflict("این اکشن پشتیبانی نمی‌شود.")
+
     server = await db.get(Server, server_id)
     if server is None:
         raise NotFound("سرور یافت نشد.")
+
     agent_action, params = allowed[action]
     result = await agent_client.call(server, agent_action, params)
+
     if agent_action == "system_info" and result.ok:
         data = result.data
         server.hostname = data.get("hostname") or server.hostname
@@ -363,6 +416,7 @@ async def server_action(
         server.cpu_model = data.get("cpu_model") or server.cpu_model
         server.private_ip = data.get("private_ip") or server.private_ip
         await db.flush()
+
     await record_audit(
         db,
         action=f"server_{action}",
@@ -373,7 +427,12 @@ async def server_action(
         error=result.error,
         ip=client_ip(request),
     )
-    return {"ok": result.ok, "output": result.output, "error": result.error, "data": result.data}
+    return {
+        "ok": result.ok,
+        "output": result.output,
+        "error": result.error,
+        "data": result.data,
+    }
 
 
 @router.post("/servers/bulk", response_model=OkResponse)
@@ -383,11 +442,15 @@ async def bulk_servers(
     db: AsyncSession = Depends(get_db),
     actor: Principal = Depends(require(Perm.SERVERS_WRITE.value)),
 ):
-    servers = (await db.execute(select(Server).where(Server.id.in_(payload.ids)))).scalars().all()
+    servers = (
+        await db.execute(select(Server).where(Server.id.in_(payload.ids)))
+    ).scalars().all()
     if not servers:
         raise NotFound("سروری یافت نشد.")
+
     if payload.action == "delete" and not actor.can(Perm.SERVERS_DELETE.value):
         raise Conflict("برای حذف سرور دسترسی لازم را ندارید.")
+
     done = 0
     for server in servers:
         if payload.action in ("maintenance_on", "maintenance_off"):
@@ -403,6 +466,7 @@ async def bulk_servers(
         elif payload.action == "delete":
             await db.delete(server)
             done += 1
+
     await record_audit(
         db,
         action=f"servers_bulk_{payload.action}",
@@ -418,7 +482,8 @@ async def bulk_servers(
 
 @router.get("/server-groups", response_model=list[ServerGroupOut])
 async def list_groups(
-    db: AsyncSession = Depends(get_db), _: Principal = Depends(require(Perm.SERVERS_READ.value))
+    db: AsyncSession = Depends(get_db),
+    _: Principal = Depends(require(Perm.SERVERS_READ.value)),
 ):
     rows = (await db.execute(select(ServerGroup).order_by(ServerGroup.name))).scalars().all()
     return [ServerGroupOut.model_validate(r) for r in rows]
