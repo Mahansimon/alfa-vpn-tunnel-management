@@ -1,4 +1,4 @@
-import type { Dictionary } from './fa'
+import type Dictionary = any;
 
 /** English dictionary. Structure mirrors the Persian one. */
 export const en: Dictionary = {
