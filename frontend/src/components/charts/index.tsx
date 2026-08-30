@@ -1,6 +1,6 @@
 /** نمودارهای پنل روی Recharts با تم پنل. */
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line,
   Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { formatBytes, formatDate, formatPercent, type DigitMode } from '@/lib/utils'
